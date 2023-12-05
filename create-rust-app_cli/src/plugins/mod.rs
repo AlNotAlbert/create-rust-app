@@ -7,7 +7,7 @@ pub mod storage;
 pub mod tasks;
 pub mod utoipa;
 
-use crate::{project, BackendFramework};
+use crate::{project, BackendFramework, BackendOrm};
 use crate::{utils::logger, BackendDatabase};
 use anyhow::Result;
 use std::path::PathBuf;
@@ -17,6 +17,7 @@ pub struct InstallConfig {
     pub project_name: String,
     pub project_dir: PathBuf,
     pub backend_framework: BackendFramework,
+    pub backend_orm: BackendOrm,
     pub backend_database: BackendDatabase,
     pub plugin_dev: bool,
     pub plugin_auth: bool,

@@ -2,7 +2,7 @@ use crate::plugins::InstallConfig;
 use crate::plugins::Plugin;
 use crate::utils::fs;
 use crate::utils::logger::add_file_msg;
-use crate::{BackendDatabase, BackendFramework};
+use crate::{BackendDatabase, BackendFramework, BackendOrm};
 use anyhow::Result;
 use indoc::indoc;
 use rust_embed::RustEmbed;
@@ -17,7 +17,6 @@ impl Plugin for Auth {
     fn name(&self) -> &'static str {
         "Auth"
     }
-
     fn install(&self, install_config: InstallConfig) -> Result<()> {
         for filename in Asset::iter() {
             let file_contents = Asset::get(filename.as_ref()).unwrap();
@@ -25,16 +24,13 @@ impl Plugin for Auth {
             file_path.push(filename.as_ref());
             let mut directory_path = std::path::PathBuf::from(&file_path);
             directory_path.pop();
-
             add_file_msg(filename.as_ref());
             std::fs::create_dir_all(directory_path)?;
             std::fs::write(file_path, file_contents.data)?;
         }
-
         // ===============================
         // PATCH FRONTEND
         // ===============================
-
         // TODO: Fix these appends/prepends by prepending the filepath with project_dir
         // currently, this works because we assume the current working directory is the project's root
         fs::prepend(
@@ -94,11 +90,10 @@ import { ResetPage } from './containers/ResetPage'"#,
             "{/* CRA: Unwrap */}",
             "{/* CRA: Unwrap */}\n</AuthProvider>",
         )?;
-
-        crate::content::migration::create(
-            "plugin_auth",
-            match install_config.backend_database {
-                BackendDatabase::Postgres => indoc! {r#"
+        match install_config.backend_orm {
+            BackendOrm::Diesel => {
+                crate::content::migration::create("plugin_auth", match install_config.backend_database {
+                    BackendDatabase::Postgres => indoc! {r#"
       CREATE TABLE users (
         id SERIAL PRIMARY KEY,
         email TEXT NOT NULL,
@@ -107,9 +102,7 @@ import { ResetPage } from './containers/ResetPage'"#,
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
-
       SELECT manage_updated_at('users');
-
       CREATE TABLE user_sessions (
         id SERIAL PRIMARY KEY,
         user_id SERIAL NOT NULL REFERENCES users(id),
@@ -118,23 +111,19 @@ import { ResetPage } from './containers/ResetPage'"#,
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
-
       SELECT manage_updated_at('user_sessions');
-
       CREATE TABLE user_permissions (
         user_id SERIAL NOT NULL REFERENCES users(id),
         permission TEXT NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (user_id, permission)
       );
-
       CREATE TABLE user_roles (
         user_id SERIAL NOT NULL REFERENCES users(id),
         role TEXT NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (user_id, role)
       );
-
       CREATE TABLE role_permissions (
         role TEXT NOT NULL,
         permission TEXT NOT NULL,
@@ -142,7 +131,7 @@ import { ResetPage } from './containers/ResetPage'"#,
         PRIMARY KEY (role, permission)
       );
     "#},
-                BackendDatabase::Sqlite => indoc! {r#"
+                    BackendDatabase::Sqlite => indoc! {r#"
       CREATE TABLE users (
         id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
         email TEXT NOT NULL,
@@ -150,7 +139,6 @@ import { ResetPage } from './containers/ResetPage'"#,
         activated BOOLEAN NOT NULL DEFAULT FALSE,
         created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
-
       CREATE TABLE user_sessions (
         id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
         user_id INTEGER NOT NULL REFERENCES users(id),
@@ -158,21 +146,18 @@ import { ResetPage } from './containers/ResetPage'"#,
         device TEXT,
         created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
-
       CREATE TABLE user_permissions (
         user_id INTEGER NOT NULL REFERENCES users(id),
         permission TEXT NOT NULL,
         created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (user_id, permission)
       );
-
       CREATE TABLE user_roles (
         user_id INTEGER NOT NULL REFERENCES users(id),
         role TEXT NOT NULL,
         created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (user_id, role)
       );
-
       CREATE TABLE role_permissions (
         role TEXT NOT NULL,
         permission TEXT NOT NULL,
@@ -180,16 +165,143 @@ import { ResetPage } from './containers/ResetPage'"#,
         PRIMARY KEY (role, permission)
       );
     "#},
-            },
-            indoc! {r#"
+                }, indoc! {r#"
       DROP TABLE user_permissions;
       DROP TABLE role_permissions;
       DROP TABLE user_roles;
       DROP TABLE user_sessions;
       DROP TABLE users;
-    "#},
-        )?;
+    "#}, )?;
+            }
+            BackendOrm::Prisma => {
+                // crate::content::prism::create();
+                let psql_up = indoc! {
+                    r#"
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
 
+
+generator client {
+    // Corresponds to the cargo alias created earlier
+    provider      = "cargo prisma"
+    // The location to generate the client. Is relative to the position of the schema
+    output        = "backend/prisma_schema.rs"
+}
+
+
+model users {
+  id            Int       @id @default(autoincrement())
+  email         String
+  hash_password String
+  activated     Boolean   @default(false)
+  created_at    DateTime  @default(now())
+  updated_at    DateTime  @updatedAt
+  user_sessions  user_sessions[]
+  user_permissions user_permissions[]
+  user_roles user_roles[]
+}
+model user_sessions {
+  id            Int       @id @default(autoincrement())
+  user_id       Int
+  refresh_token String
+  device        String?
+  created_at    DateTime  @default(now())
+  updated_at    DateTime  @updatedAt
+  users         users     @relation(fields: [user_id], references: [id])
+}
+model user_permissions {
+  user_id      Int
+  permission   String
+  created_at   DateTime @default(now())
+  users        users    @relation(fields: [user_id], references: [id])
+  @@id([user_id, permission])
+}
+model user_roles {
+  user_id      Int
+  role         String
+  created_at   DateTime @default(now())
+  users        users    @relation(fields: [user_id], references: [id])
+  @@id([user_id, role])
+}
+model role_permissions {
+  role         String
+  permission   String
+  created_at   DateTime @default(now())
+  @@id([role, permission])
+}
+                "#};
+
+                let psql_down = indoc! {
+                    r#"
+                    datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+    // Corresponds to the cargo alias created earlier
+    provider      = "cargo prisma"
+    // The location to generate the client. Is relative to the position of the schema
+    // output        = "backend/prisma_schema.rs"
+        output        = "./src/generated/db.rs"
+    // `select` macros will now point to `crate::generated::db`
+    // instead of `crate::prisma`
+    module_path   = "generated::db"
+}
+
+
+
+                    model users {
+  id            Int       @id @default(autoincrement())
+  email         String
+  hash_password String
+  activated     Boolean   @default(false)
+  created_at    DateTime  @default(now())
+  updated_at    DateTime  @updatedAt
+  user_sessions  user_sessions[]
+  user_permissions user_permissions[]
+  user_roles user_roles[]
+}
+
+model user_sessions {
+  id            Int       @id @default(autoincrement())
+  user_id       Int
+  refresh_token String
+  device        String?
+  created_at    DateTime  @default(now())
+  updated_at    DateTime  @updatedAt
+  users         users     @relation(fields: [user_id], references: [id])
+}
+
+model user_permissions {
+  user_id      Int
+  permission   String
+  created_at   DateTime @default(now())
+  users        users    @relation(fields: [user_id], references: [id])
+  @@id([user_id, permission])
+}
+
+model user_roles {
+  user_id      Int
+  role         String
+  created_at   DateTime @default(now())
+  users        users    @relation(fields: [user_id], references: [id])
+  @@id([user_id, role])
+}
+
+model role_permissions {
+  role         String
+  permission   String
+  created_at   DateTime @default(now())
+  @@id([role, permission])
+}
+                    "#};
+
+                todo!("Prisma ORM not yet supported");
+            }
+        }
         match install_config.backend_framework {
             BackendFramework::ActixWeb => crate::content::service::register_actix(
                 "auth",
@@ -201,7 +313,6 @@ import { ResetPage } from './containers/ResetPage'"#,
                 "/auth",
             )?,
         };
-
         Ok(())
     }
 }

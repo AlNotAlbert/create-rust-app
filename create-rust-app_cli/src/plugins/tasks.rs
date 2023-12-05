@@ -7,7 +7,7 @@ use crate::plugins::InstallConfig;
 use crate::plugins::Plugin;
 use crate::utils::fs;
 use crate::utils::logger::add_file_msg;
-use crate::{BackendDatabase, BackendFramework};
+use crate::{BackendDatabase, BackendFramework, BackendOrm, create_project};
 
 pub struct Tasks {}
 
@@ -53,9 +53,49 @@ impl Plugin for Tasks {
         // Create migration
         // ===============================
 
-        crate::content::migration::create(
-            "plugin_tasks",
-            indoc! {r#"CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+        match install_config.backend_orm {
+            BackendOrm::Prisma => {
+                let prisma_scheme = indoc! {
+                    r#"generator client {
+  provider = "backend/prisma_schema.rs"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Fang_Task_State {
+  NEW
+  IN_PROGRESS
+  FAILED
+  FINISHED
+  RETRIED
+}
+
+model Fang_Tasks {
+  id            String            @id @default(dbgenerated())
+  metadata      Json              @db.JsonB
+  error_message String?
+  state         Fang_Task_State   @default(NEW)
+  task_type     String            @default("common")
+  uniq_hash     String?
+  retries       Int               @default(0)
+  scheduled_at  DateTime          @default(now()) @map("scheduled_at")
+  created_at    DateTime          @default(now()) @map("created_at")
+  updated_at    DateTime          @default(now()) @map("updated_at")
+
+  @@index([state], name: "fang_tasks_state_index")
+  @@index([task_type], name: "fang_tasks_type_index")
+  @@index([scheduled_at], name: "fang_tasks_scheduled_at_index")
+  @@index([uniq_hash], name: "fang_tasks_uniq_hash")
+}
+                "#};
+            }
+            BackendOrm::Diesel => {
+                crate::content::migration::create(
+                    "plugin_tasks",
+                    indoc! {r#"CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 CREATE TYPE fang_task_state AS ENUM ('new', 'in_progress', 'failed', 'finished', 'retried');
 
@@ -77,8 +117,11 @@ CREATE INDEX fang_tasks_type_index ON fang_tasks(task_type);
 CREATE INDEX fang_tasks_scheduled_at_index ON fang_tasks(scheduled_at);
 CREATE INDEX fang_tasks_uniq_hash ON fang_tasks(uniq_hash);
 "#},
-            r#"DROP TABLE fang_tasks;"#,
-        )?;
+                    r#"DROP TABLE fang_tasks;"#,
+                )?;
+            }
+        };
+
 
         // ===============================
         // Create/update backend files
@@ -111,7 +154,6 @@ CREATE INDEX fang_tasks_uniq_hash ON fang_tasks(uniq_hash);
     }
 
 "##.trim();
-
         match install_config.backend_framework {
             BackendFramework::ActixWeb => {
                 fs::replace(

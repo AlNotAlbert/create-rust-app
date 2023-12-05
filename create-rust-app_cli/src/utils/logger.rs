@@ -1,4 +1,4 @@
-use crate::BackendDatabase;
+use crate::{BackendDatabase, BackendOrm};
 use console::style;
 
 pub fn message(msg: &str) {
@@ -76,6 +76,16 @@ pub fn project_created_msg(install_config: crate::plugins::InstallConfig) {
 
     command_msg("diesel --help\t# checking diesel_cli installation");
 
+    let orm = install_config.backend_orm;
+    let is_prisma_cli_installed =  match std::process::Command::new("prisma")   .arg("--help")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+    {
+        Ok(status) => status.success(),
+        Err(_) => false,
+    };
+
     let is_diesel_cli_installed = match std::process::Command::new("diesel")
         .arg("--help")
         .stdout(std::process::Stdio::null())
@@ -100,29 +110,63 @@ pub fn project_created_msg(install_config: crate::plugins::InstallConfig) {
         ));
     }
 
-    if !is_diesel_cli_installed {
-        message("• Install diesel (to manage the database)");
-        message(&format!(
-            "  $ {} \"{}\"",
-            style("cargo install diesel_cli --no-default-features --features").cyan(),
-            match install_config.backend_database {
-                BackendDatabase::Postgres => "postgres",
-                BackendDatabase::Sqlite => "sqlite-bundled",
+    match orm {
+        BackendOrm::Diesel => {
+            if !is_diesel_cli_installed {
+                message("• Install diesel (to manage the database)");
+                message(&format!(
+                    "  $ {} \"{}\"",
+                    style("cargo install diesel_cli --no-default-features --features").cyan(),
+                    match install_config.backend_database {
+                        BackendDatabase::Postgres => "postgres",
+                        BackendDatabase::Sqlite => "sqlite-bundled",
+                    }
+                ));
             }
-        ));
+
+            message("• Begin development!");
+            message("  1. Change to your project directory");
+            message(&format!(
+                "     $ {}",
+                style(format!("cd {project_name:#?}")).cyan()
+            ));
+            message("  2. Open `.env` and set the DATABASE_URL");
+            message(&format!("     $ {}", style("vim .env").cyan()));
+            message("  3. Setup your database:");
+            message(&format!("     $ {}", style("diesel database reset").cyan()));
+            message("  4. Develop! Run the following for continuous compilation:");
+            message(&format!("     $ {}", style("cargo fullstack").cyan()));
+            message("• Enjoy!");
+        },
+        BackendOrm::Prisma => {
+            if !is_prisma_cli_installed {
+                message("• Install prisma (to manage the database)");
+                message(&format!(
+                    "  $ {}",
+                    style("npm install -g prisma").cyan(),
+
+                ));
+            }
+            // add message setup for prisma
+            message("• Begin development!");
+            message("  1. Change to your project directory");
+
+            message(&format!(
+                "     $ {}",
+                style(format!("cd {project_name:#?}")).cyan()
+            ));
+            message("  2. Open `.env` and set the DATABASE_URL");
+            message(&format!("     $ {}", style("vim .env").cyan()));
+            message("  3. Setup your database:");
+            message(&format!("     $ {}", style("cargo prisma generate").cyan()));
+            message("  4. Develop! Run the following for continuous compilation:");
+            message(&format!("     $ {}", style("cargo fullstack").cyan()));
+
+
+        }
+
+
+
     }
 
-    message("• Begin development!");
-    message("  1. Change to your project directory");
-    message(&format!(
-        "     $ {}",
-        style(format!("cd {project_name:#?}")).cyan()
-    ));
-    message("  2. Open `.env` and set the DATABASE_URL");
-    message(&format!("     $ {}", style("vim .env").cyan()));
-    message("  3. Setup your database:");
-    message(&format!("     $ {}", style("diesel database reset").cyan()));
-    message("  4. Develop! Run the following for continuous compilation:");
-    message(&format!("     $ {}", style("cargo fullstack").cyan()));
-    message("• Enjoy!");
 }
